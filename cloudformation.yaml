@@ -1,0 +1,144 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Deploy Grafana on ECS Fargate with Lambda for Start/Stop"
+
+Resources:
+  GrafanaVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.0.0.0/16"
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: GrafanaVPC
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref GrafanaVPC
+      CidrBlock: "10.0.1.0/24"
+      MapPublicIpOnLaunch: true
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow HTTP and SSH"
+      VpcId: !Ref GrafanaVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: "0.0.0.0/0"
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: "grafana-cluster"
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: "ECSExecutionPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:GetAuthorizationToken
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  GrafanaTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: "grafana-task"
+      Cpu: "512"
+      Memory: "1024"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: "grafana"
+          Image: "grafana/grafana:latest"
+          PortMappings:
+            - ContainerPort: 3000
+
+  GrafanaService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref GrafanaTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets:
+            - !Ref PublicSubnet
+          SecurityGroups:
+            - !Ref SecurityGroup
+          AssignPublicIp: ENABLED
+
+  LambdaIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: "LambdaECSControl"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:UpdateService
+                  - ecs:DescribeServices
+                Resource: "*"
+
+  StartStopLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "StartStopGrafanaECS"
+      Runtime: python3.9
+      Handler: "index.lambda_handler"
+      Role: !GetAtt LambdaIAMRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          ecs = boto3.client('ecs')
+
+          CLUSTER_NAME = "grafana-cluster"
+          SERVICE_NAME = "grafana-service"
+
+          def lambda_handler(event, context):
+              action = event.get('action', 'start')
+              desired_count = 1 if action == 'start' else 0
+              
+              ecs.update_service(
+                  cluster=CLUSTER_NAME,
+                  service=SERVICE_NAME,
+                  desiredCount=desired_count
+              )
+              
+              return f"ECS Service {SERVICE_NAME} updated to desired count: {desired_count}"
+
+Outputs:
+  GrafanaURL:
+    Description: "Grafana Public Endpoint"
+    Value: !Sub "http://${PublicSubnet}.compute.amazonaws.com:3000"
