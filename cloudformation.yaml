@@ -2,6 +2,8 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: "Deploy Grafana on ECS Fargate with Lambda for Start/Stop"
 
 Resources:
+
+  # ---------------- VPC & Networking ----------------
   GrafanaVPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -12,6 +14,15 @@ Resources:
         - Key: Name
           Value: GrafanaVPC
 
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref GrafanaVPC
+      InternetGatewayId: !Ref InternetGateway
+
   PublicSubnet:
     Type: AWS::EC2::Subnet
     Properties:
@@ -19,10 +30,28 @@ Resources:
       CidrBlock: "10.0.1.0/24"
       MapPublicIpOnLaunch: true
 
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref GrafanaVPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
   SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: "Allow HTTP and SSH"
+      GroupDescription: "Allow HTTP access to Grafana"
       VpcId: !Ref GrafanaVPC
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -30,6 +59,7 @@ Resources:
           ToPort: 3000
           CidrIp: "0.0.0.0/0"
 
+  # ---------------- ECS Cluster & Task Definition ----------------
   ECSCluster:
     Type: AWS::ECS::Cluster
     Properties:
@@ -90,6 +120,7 @@ Resources:
             - !Ref SecurityGroup
           AssignPublicIp: ENABLED
 
+  # ---------------- Lambda Function for ECS Start/Stop ----------------
   LambdaIAMRole:
     Type: AWS::IAM::Role
     Properties:
@@ -109,7 +140,7 @@ Resources:
                 Action:
                   - ecs:UpdateService
                   - ecs:DescribeServices
-                Resource: "*"
+                Resource: !GetAtt GrafanaService.Arn
 
   StartStopLambda:
     Type: AWS::Lambda::Function
@@ -118,13 +149,18 @@ Resources:
       Runtime: python3.9
       Handler: "index.lambda_handler"
       Role: !GetAtt LambdaIAMRole.Arn
+      Environment:
+        Variables:
+          CLUSTER_NAME: !Ref ECSCluster
+          SERVICE_NAME: !Ref GrafanaService
       Code:
         ZipFile: |
+          import os
           import boto3
           ecs = boto3.client('ecs')
 
-          CLUSTER_NAME = "grafana-cluster"
-          SERVICE_NAME = "grafana-service"
+          CLUSTER_NAME = os.environ['CLUSTER_NAME']
+          SERVICE_NAME = os.environ['SERVICE_NAME']
 
           def lambda_handler(event, context):
               action = event.get('action', 'start')
@@ -139,6 +175,7 @@ Resources:
               return f"ECS Service {SERVICE_NAME} updated to desired count: {desired_count}"
 
 Outputs:
-  GrafanaURL:
+
+  GrafanaPublicIP:
     Description: "Grafana Public Endpoint"
-    Value: !Sub "http://${PublicSubnet}.compute.amazonaws.com:3000"
+    Value: !Sub "http://${AWS::StackName}.elb.${AWS::Region}.amazonaws.com:3000"
