@@ -51,7 +51,7 @@ Resources:
   SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: "Allow HTTP access to Grafana"
+      GroupDescription: "Allow HTTP and SSH"
       VpcId: !Ref GrafanaVPC
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -59,7 +59,6 @@ Resources:
           ToPort: 3000
           CidrIp: "0.0.0.0/0"
 
-  # ---------------- ECS Cluster & Task Definition ----------------
   ECSCluster:
     Type: AWS::ECS::Cluster
     Properties:
@@ -140,7 +139,7 @@ Resources:
                 Action:
                   - ecs:UpdateService
                   - ecs:DescribeServices
-                Resource: !GetAtt GrafanaService.Arn
+                Resource: "*"
 
   StartStopLambda:
     Type: AWS::Lambda::Function
