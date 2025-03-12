@@ -162,7 +162,7 @@ Resources:
           SERVICE_NAME = os.environ['SERVICE_NAME']
 
           def lambda_handler(event, context):
-              action = event.get('action', 'start')
+              action = event.get('action', 'start' if event['time'].split(':')[0] == '06' else 'stop')
               desired_count = 1 if action == 'start' else 0
               
               ecs.update_service(
@@ -173,8 +173,19 @@ Resources:
               
               return f"ECS Service {SERVICE_NAME} updated to desired count: {desired_count}"
 
-Outputs:
+  EventBridgeRule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: "cron(0 6,18 * * ? *)"
+      Targets:
+        - Arn: !GetAtt StartStopLambda.Arn
+          Id: "StartStopECSLambda"
+          InputTransformer:
+            InputPathsMap:
+              time: "$.time"
+            InputTemplate: "{\"time\": \"<time>\"}"
 
+Outputs:
   GrafanaPublicIP:
     Description: "Grafana Public Endpoint"
     Value: !Sub "http://${AWS::StackName}.elb.${AWS::Region}.amazonaws.com:3000"
