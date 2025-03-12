@@ -47,9 +47,10 @@ pipeline {
                         sh """
                         export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
                         export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-                        aws lambda invoke \
+                        echo '{ "action": "start" }' | aws lambda invoke \
                         --function-name StartStopGrafanaECS \
-                        --payload '{ "action": "start" }' \
+                       --payload '{"action": "start"}' \
+                       --cli-binary-format raw-in-base64-out \
                         response.json
                         """
                     }
